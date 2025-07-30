@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MVP Consulting Group</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        :root {
+            /* Dark Mode Colors */
+            --bg-dark: #0f172a;
+            --sidebar-dark: #1e293b;
+            --card-dark: #1e293b;
+            --text-primary-dark: #f1f5f9;
+            --text-secondary-dark: #94a3b8;
+            --border-dark: #334155;
+            --accent-dark: #60a5fa;
+            --modal-overlay: rgba(15, 23, 42, 0.8);
+        }
+        html { background-color: var(--bg-dark); color: var(--text-primary-dark); }
+        body { font-family: 'Inter', sans-serif; }
+
+        .sidebar { background-color: var(--sidebar-dark); border-color: var(--border-dark); }
+        .card, .auth-card { background-color: var(--card-dark); border-color: var(--border-dark); }
+        .search-input, .form-input { background-color: var(--sidebar-dark); border-color: var(--border-dark); color: var(--text-primary-dark); }
+        .form-input:focus { outline: none; ring: 2px; ring-color: var(--accent-dark); }
+
+        .employee-item.active { background-color: var(--accent-dark); color: #0f172a; }
+        .employee-item.active .status-dot { background-color: #0f172a; }
+        .employee-item.active p { color: #0f172a !important; }
+
+        .spinner {
+            width: 1.5rem; height: 1.5rem; border-radius: 50%;
+            border: 2px solid var(--border-dark);
+            border-top-color: var(--accent-dark);
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Modal Styles */
+        .modal-overlay {
+            background-color: var(--modal-overlay);
+            transition: opacity 0.3s ease;
+        }
+        .modal-content {
+            background-color: var(--sidebar-dark);
+            transition: transform 0.3s ease;
+        }
+        
+        /* Filter Button Styles */
+        .filter-btn {
+            background-color: var(--sidebar-dark);
+            color: var(--text-secondary-dark);
+            border: 1px solid var(--border-dark);
+        }
+        .filter-btn.active {
+            background-color: var(--accent-dark);
+            color: #0f172a;
+            border-color: var(--accent-dark);
+        }
+    </style>
+</head>
+<body class="antialiased text-slate-200">
+
+    <!-- Auth View -->
+    <div id="auth-view" class="h-screen w-full flex items-center justify-center p-4">
+        <div class="auth-card w-full max-w-sm p-8 rounded-lg shadow-xl border border-slate-800">
+            <h1 class="text-2xl font-bold text-center mb-6">MVP Consulting Group</h1>
+            <form id="login-form" class="space-y-4">
+                <div>
+                    <label for="email" class="block text-sm font-medium mb-1">Email</label>
+                    <input type="email" id="email" name="email" class="form-input w-full p-2 rounded-md" required>
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium mb-1">Password</label>
+                    <input type="password" id="password" name="password" class="form-input w-full p-2 rounded-md" required>
+                </div>
+                <div class="flex flex-col space-y-2 pt-2">
+                     <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md w-full">Sign In</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main App View -->
+    <div id="app-view" class="h-screen w-full flex overflow-hidden hidden">
+        <!-- App content is dynamically injected here -->
+    </div>
+    
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 bg-green-500 text-white py-2 px-4 rounded-lg shadow-lg hidden transition-opacity duration-300">
+        <p id="toast-message"></p>
+    </div>
+
+
+    <script>
+        const { createClient } = supabase;
+
+        // --- Hardcoded Supabase Credentials ---
+        const supabaseUrl = 'https://dvbikzjpszfwffrbrddu.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Ymlrempwc3pmd2ZmcmJyZGR1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk3NDY1NjcsImV4cCI6MjA2NTMyMjU2N30.Fevr5skv_ZkxeSC3l7oaZt1wD4DG5nqkoUl4zxaDgSo';
+        let supabaseClient;
+        const EMPLOYEES_PER_PAGE = 30;
+
+        // --- DOM Elements ---
+        const authView = document.getElementById('auth-view');
+        const appView = document.getElementById('app-view');
+        const loginForm = document.getElementById('login-form');
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toast-message');
+        
+        // --- App State ---
+        let appState = {
+            employees: [],
+            selectedEmployeeId: null,
+            currentPage: 0,
+            isLoadingMore: false,
+            hasMore: true,
+            user: null,
+            statusFilter: 'all',
+        };
+
+        // --- INITIALIZATION ---
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeSupabase();
+            setupAuthListeners();
+            checkUserSession();
+        });
+        
+        // --- SETUP ---
+        function initializeSupabase() {
+            try {
+                supabaseClient = createClient(supabaseUrl, supabaseKey);
+            } catch (error) {
+                console.error("Supabase initialization failed:", error);
+            }
+        }
+
+        function initializeApp() {
+            appView.innerHTML = `
+                <aside class="sidebar w-full md:w-1/3 lg:w-1/4 border-r border-slate-800 flex flex-col">
+                    <header class="p-4 border-b border-slate-800 flex justify-between items-center flex-shrink-0">
+                        <div class="flex items-center space-x-2">
+                             <svg class="h-6 w-6 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-2.438M15 19.128v-3.872M15 19.128l-3.262-3.262a5.03 5.03 0 00-7.072-7.072l-3.262 3.262M15 19.128l2.104-2.104a5.035 5.035 0 000-7.072M9 15v3.872M9 15l-3.262-3.262a5.03 5.03 0 010-7.072L9 4.664M9 15l2.104-2.104a5.035 5.035 0 017.072 0" /></svg>
+                            <h1 class="text-lg font-bold">MVP Consulting Group</h1>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                            <button id="settings-btn" class="p-2 rounded-full hover:bg-slate-700 cursor-pointer" title="Settings">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01-.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" /></svg>
+                            </button>
+                            <button id="add-entry-btn" class="p-2 rounded-full hover:bg-slate-700 cursor-pointer" title="Add New Entry">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" /></svg>
+                            </button>
+                            <button id="logout-btn" class="p-2 rounded-full hover:bg-slate-700 cursor-pointer" title="Logout">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 3a1 1 0 00-1 1v12a1 1 0 102 0V4a1 1 0 00-1-1zm10.293 9.293a1 1 0 001.414 1.414l3-3a1 1 0 000-1.414l-3-3a1 1 0 10-1.414 1.414L14.586 9H7a1 1 0 100 2h7.586l-1.293 1.293z" clip-rule="evenodd" /></svg>
+                            </button>
+                        </div>
+                    </header>
+                    <div class="p-4 flex-shrink-0 space-y-4">
+                        <input type="text" id="searchName" class="search-input w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Search by name...">
+                        <div id="status-filter-group" class="flex items-center space-x-2">
+                            <button data-status="all" class="filter-btn active flex-1 text-sm py-1 px-2 rounded-md">All</button>
+                            <button data-status="Active" class="filter-btn flex-1 text-sm py-1 px-2 rounded-md">Active</button>
+                            <button data-status="Terminated" class="filter-btn flex-1 text-sm py-1 px-2 rounded-md">Terminated</button>
+                        </div>
+                    </div>
+                    <div id="employee-list-container" class="flex-grow overflow-y-auto">
+                        <ul id="employee-list" class="divide-y divide-slate-800"></ul>
+                        <div id="infinite-loader" class="h-16 flex items-center justify-center hidden"><div class="spinner"></div></div>
+                    </div>
+                </aside>
+                <main id="main-content" class="w-full md:w-2/3 lg:w-3/4 bg-slate-900/50 overflow-y-auto p-4 sm:p-6 lg:p-8"></main>
+            `;
+            createModals();
+            setupAppEventListeners();
+            fetchEmployees(true); // Initial fetch
+            renderEmptyState();
+        }
+        
+        function setupAuthListeners() {
+            loginForm.addEventListener('submit', handleSignIn);
+            supabaseClient.auth.onAuthStateChange((event, session) => {
+                if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+                    appState.user = session?.user;
+                    showApp();
+                } else if (event === 'SIGNED_OUT') {
+                    appState.user = null;
+                    showAuth();
+                }
+            });
+        }
+
+        function setupAppEventListeners() {
+            document.getElementById('searchName').addEventListener('input', debounce(handleSearch, 300));
+            document.getElementById('logout-btn').addEventListener('click', handleSignOut);
+            document.getElementById('employee-list-container').addEventListener('scroll', handleScroll);
+            document.getElementById('add-entry-btn').addEventListener('click', () => openModal());
+            document.getElementById('settings-btn').addEventListener('click', openSettingsModal);
+            document.querySelectorAll('#status-filter-group .filter-btn').forEach(btn => {
+                btn.addEventListener('click', handleStatusFilter);
+            });
+        }
+
+        // --- AUTHENTICATION ---
+        async function checkUserSession() {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (session) {
+                appState.user = session.user;
+                showApp();
+            } else {
+                showAuth();
+            }
+        }
+        
+        async function handleSignIn(e) {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const { email, password } = Object.fromEntries(formData.entries());
+            const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) {
+                if (error.message.includes('Failed to fetch')) {
+                    showToast('Network Error: Could not connect to the database. Please check your internet connection or try again in a few minutes.', 'error');
+                } else {
+                    showToast(error.message, 'error');
+                }
+            }
+        }
+
+        async function handleSignOut() {
+            await supabaseClient.auth.signOut();
+        }
+        
+        function showApp() {
+            authView.classList.add('hidden');
+            appView.classList.remove('hidden');
+            if (!appView.innerHTML.trim()) {
+                initializeApp();
+            }
+        }
+        
+        function showAuth() {
+            appView.classList.add('hidden');
+            authView.classList.remove('hidden');
+            // Non-destructive logout: reset state instead of clearing HTML
+            appState.employees = [];
+            appState.selectedEmployeeId = null;
+            appState.currentPage = 0;
+            appState.hasMore = true;
+            appState.statusFilter = 'all';
+            if (document.getElementById('main-content')) {
+                renderEmptyState();
+            }
+            if (document.getElementById('employee-list')) {
+                document.getElementById('employee-list').innerHTML = '';
+            }
+            const searchInput = document.getElementById('searchName');
+            if (searchInput) searchInput.value = '';
+            updateFilterButtonsUI();
+        }
+
+        // --- DATA FETCHING & RENDERING (with Pagination & Filtering) ---
+        async function fetchEmployees(isInitial = false, query = '') {
+            if (appState.isLoadingMore) return;
+            appState.isLoadingMore = true;
+            if (isInitial) {
+                appState.currentPage = 0;
+                appState.employees = [];
+                appState.hasMore = true;
+            }
+            const loader = document.getElementById('infinite-loader');
+            if (loader) loader.classList.remove('hidden');
+
+            const from = appState.currentPage * EMPLOYEES_PER_PAGE;
+            const to = from + EMPLOYEES_PER_PAGE - 1;
+            
+            let request = supabaseClient
+                .from('employees')
+                .select('*')
+                .order('full_name', { ascending: true })
+                .range(from, to);
+            
+            if (query) {
+                request = request.ilike('full_name', `%${query}%`);
+            }
+            if (appState.statusFilter !== 'all') {
+                request = request.eq('status', appState.statusFilter);
+            }
+
+            const { data, error } = await request;
+            
+            if (error) {
+                console.error("Error fetching employees:", error);
+                appState.isLoadingMore = false;
+                if (isInitial) {
+                    const mainContentEl = document.getElementById('main-content');
+                    if (mainContentEl) {
+                        mainContentEl.innerHTML = `<div class="text-center p-8 text-red-400">
+                            <h2 class="text-xl font-bold">Failed to Load Data</h2>
+                            <p>${error.message}</p>
+                            <p class="mt-4 text-sm text-slate-500">Please check your internet connection and ensure the database is active, then refresh the page.</p>
+                        </div>`;
+                    }
+                }
+                return;
+            }
+            
+            if (isInitial) {
+                appState.employees = data;
+            } else {
+                appState.employees.push(...data);
+            }
+            
+            if (data.length < EMPLOYEES_PER_PAGE) {
+                appState.hasMore = false;
+            }
+            
+            renderEmployeeList();
+            appState.currentPage++;
+            appState.isLoadingMore = false;
+            if (loader) loader.classList.add('hidden');
+        }
+        
+        function handleScroll(e) {
+            const { scrollTop, scrollHeight, clientHeight } = e.target;
+            const isSearching = document.getElementById('searchName').value.trim() !== '';
+            if (scrollTop + clientHeight >= scrollHeight - 100 && !appState.isLoadingMore && appState.hasMore && !isSearching) {
+                fetchEmployees();
+            }
+        }
+
+        async function handleSearch(event) {
+            const query = event.target.value.trim();
+            appState.selectedEmployeeId = null;
+            renderEmptyState();
+            await fetchEmployees(true, query);
+        }
+
+        function handleStatusFilter(event) {
+            const status = event.target.dataset.status;
+            if (status === appState.statusFilter) return;
+
+            appState.statusFilter = status;
+            appState.selectedEmployeeId = null;
+            renderEmptyState();
+            updateFilterButtonsUI();
+            const query = document.getElementById('searchName').value.trim();
+            fetchEmployees(true, query);
+        }
+
+        function updateFilterButtonsUI() {
+            const filterGroup = document.getElementById('status-filter-group');
+            if (!filterGroup) return;
+            filterGroup.querySelectorAll('.filter-btn').forEach(btn => {
+                if (btn.dataset.status === appState.statusFilter) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+        
+        // --- RENDERING ---
+        function renderEmployeeList() {
+            const employeeListEl = document.getElementById('employee-list');
+            if (!employeeListEl) return;
+            
+            const employeeListContainer = document.getElementById('employee-list-container');
+            const wasAtTop = employeeListContainer.scrollTop === 0;
+
+            if (appState.currentPage === 0) employeeListEl.innerHTML = '';
+            
+            if (appState.employees.length === 0 && appState.currentPage === 0) {
+                employeeListEl.innerHTML = `<li class="p-4 text-center text-slate-500">No employees found.</li>`;
+                return;
+            }
+            
+            const fragment = document.createDocumentFragment();
+            appState.employees.forEach(employee => {
+                const existingLi = employeeListEl.querySelector(`[data-employee-id='${employee.id}']`);
+                if (existingLi) { 
+                    existingLi.className = `employee-item p-4 flex items-center cursor-pointer hover:bg-slate-700/50 transition-colors duration-150 ${appState.selectedEmployeeId === employee.id ? 'active' : ''}`;
+                } else { 
+                    const li = document.createElement('li');
+                    li.className = `employee-item p-4 flex items-center cursor-pointer hover:bg-slate-700/50 transition-colors duration-150 ${appState.selectedEmployeeId === employee.id ? 'active' : ''}`;
+                    li.dataset.employeeId = employee.id;
+                    
+                    const statusColor = employee.status === 'Active' ? 'bg-green-500' : 'bg-slate-500';
+
+                    li.innerHTML = `
+                        <div class="status-dot h-2.5 w-2.5 rounded-full mr-4 flex-shrink-0 ${statusColor}"></div>
+                        <div>
+                            <h3 class="font-semibold">${employee.full_name}</h3>
+                            <p class="text-sm text-slate-400">${employee.company}</p>
+                        </div>
+                    `;
+                    li.addEventListener('click', () => handleEmployeeSelection(employee.id));
+                    fragment.appendChild(li);
+                }
+            });
+            employeeListEl.appendChild(fragment);
+
+            if (wasAtTop) {
+                employeeListContainer.scrollTop = 0;
+            }
+        }
+        
+        async function handleEmployeeSelection(employeeId) {
+            appState.selectedEmployeeId = employeeId;
+            renderEmployeeList(); 
+            
+            const mainContentEl = document.getElementById('main-content');
+            mainContentEl.innerHTML = `
+                <div id="details-view" class="max-w-4xl mx-auto">
+                    <div id="details-loader">
+                        <div class="flex items-center mb-6"><div class="skeleton-loader h-20 w-20 rounded-full mr-6"></div><div class="flex-grow"><div class="skeleton-loader h-8 w-1/2 mb-3"></div><div class="skeleton-loader h-6 w-1/3"></div></div></div><div class="skeleton-loader h-64 w-full"></div>
+                    </div>
+                    <div id="employee-details" class="hidden"></div>
+                </div>`;
+            
+            const employee = appState.employees.find(e => e.id === employeeId);
+            const { data: benefits, error } = await supabaseClient
+                .from('benefits')
+                .select('*')
+                .eq('employee_id', employeeId);
+
+            if (error) {
+                console.error("Error fetching benefits:", error);
+                return;
+            }
+
+            renderEmployeeDetails(employee, benefits);
+            getAiSummary(employee, benefits);
+        }
+
+        function renderEmptyState() {
+            const mainContentEl = document.getElementById('main-content');
+            if (mainContentEl) {
+                mainContentEl.innerHTML = `
+                    <div id="empty-state" class="h-full flex flex-col justify-center items-center text-center">
+                        <svg class="h-16 w-16 text-slate-600 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
+                        <h2 class="text-xl font-semibold">Select an Employee</h2>
+                        <p class="text-slate-400 mt-1">Choose an employee from the list to view their details.</p>
+                    </div>`;
+            }
+        }
+
+        function renderEmployeeDetails(employee, benefits) {
+            const detailsView = document.getElementById('details-view');
+            if (!detailsView) return;
+
+            const benefitsHtml = benefits.length > 0 
+                ? benefits.map(b => `
+                    <div class="p-3 mb-2 border border-slate-700 rounded-md bg-slate-800">
+                        <p class="font-semibold text-blue-400">${b.benefit_type}</p>
+                        <p><strong>Carrier:</strong> ${b.carrier}</p>
+                        <p><strong>Plan:</strong> ${b.elected_benefit}</p>
+                        <p><strong>Pay Deduction:</strong> $${b.pay_deduction}</p>
+                    </div>
+                `).join('')
+                : '<p class="text-sm text-slate-500">No benefits information available.</p>';
+            
+            const statusColor = employee.status === 'Active' ? 'text-green-400' : 'text-slate-400';
+            const statusBg = employee.status === 'Active' ? 'bg-green-900/50' : 'bg-slate-700/50';
+
+            detailsView.innerHTML = `
+                <div id="employee-details">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between mb-6">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <div class="h-20 w-20 rounded-full bg-slate-700 flex items-center justify-center text-3xl font-bold text-slate-500">
+                                    ${employee.full_name.split(' ').map(n=>n[0]).join('')}
+                                </div>
+                            </div>
+                            <div class="sm:ml-6">
+                                <h2 class="text-3xl font-bold">${employee.full_name}</h2>
+                                <p class="text-lg text-slate-400">${employee.company}</p>
+                            </div>
+                        </div>
+                        <div class="flex space-x-2 mt-4 sm:mt-0">
+                            <button id="edit-employee-btn" class="p-2 rounded-md hover:bg-slate-700" title="Edit"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" /><path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" /></svg></button>
+                            <button id="delete-employee-btn" class="p-2 rounded-md hover:bg-slate-700" title="Delete"><svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg></button>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div class="card p-6 border rounded-lg">
+                            <h3 class="font-semibold text-xl mb-4">Employee Information</h3>
+                            <div class="space-y-3">
+                                <p><strong>Status:</strong> <span class="px-2 py-1 text-sm rounded-full ${statusBg} ${statusColor}">${employee.status}</span></p>
+                                <p><strong>Phone:</strong> ${employee.phone || 'N/A'}</p>
+                                <p><strong>Birthdate:</strong> ${employee.birthdate ? new Date(employee.birthdate).toLocaleDateString() : 'N/A'}</p>
+                                <p><strong>Hourly Rate:</strong> ${employee.hourly_rate ? '$' + employee.hourly_rate : 'N/A'}</p>
+                            </div>
+                        </div>
+                         <div class="card p-6 border rounded-lg">
+                            <h3 class="font-semibold text-xl mb-4">Benefits Directory</h3>
+                            <div class="space-y-2 text-sm">${benefitsHtml}</div>
+                        </div>
+                    </div>
+                    <div class="card p-6 border rounded-lg mt-8">
+                        <h3 class="font-semibold text-xl mb-3">Generated Summary</h3>
+                        <div id="summary-content" class="text-slate-300"></div>
+                    </div>
+                </div>`;
+            
+            document.getElementById('edit-employee-btn').addEventListener('click', () => openModal(employee, benefits));
+            document.getElementById('delete-employee-btn').addEventListener('click', () => openDeleteConfirm(employee.id));
+        }
+
+        // --- MODALS & CRUD ---
+        function createModals() {
+            const modalHtml = `
+                <div id="add-entry-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
+                    <div class="modal-overlay absolute inset-0"></div>
+                    <div class="modal-content w-full max-w-2xl max-h-[90vh] rounded-lg shadow-xl z-10 flex flex-col">
+                        <header class="p-4 border-b border-slate-700 flex justify-between items-center flex-shrink-0">
+                            <h2 id="modal-title" class="text-xl font-bold">Add New Entry</h2>
+                            <button class="close-modal-btn p-2 rounded-full hover:bg-slate-700">&times;</button>
+                        </header>
+                        <div id="modal-body" class="p-6 flex-grow overflow-y-auto"></div>
+                        <div id="modal-loader" class="absolute inset-0 bg-slate-800/80 flex items-center justify-center hidden">
+                            <div class="spinner"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="confirm-delete-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
+                     <div class="modal-overlay absolute inset-0"></div>
+                     <div class="modal-content w-full max-w-md rounded-lg shadow-xl z-10 p-6">
+                        <h2 class="text-xl font-bold mb-4">Are you sure?</h2>
+                        <p class="text-slate-400 mb-6">This action cannot be undone. This will permanently delete the employee and all their associated benefits.</p>
+                        <div class="flex justify-end space-x-4">
+                            <button class="cancel-delete-btn bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                            <button id="confirm-delete-action-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md">Delete</button>
+                        </div>
+                     </div>
+                </div>
+                <div id="settings-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 hidden">
+                     <div class="modal-overlay absolute inset-0"></div>
+                     <div class="modal-content w-full max-w-md rounded-lg shadow-xl z-10 p-6">
+                        <h2 class="text-xl font-bold mb-4">Settings</h2>
+                        <form id="settings-form">
+                            <div class="mb-4">
+                                <label for="google-api-key" class="block text-sm font-medium mb-1">Google AI API Key</label>
+                                <input type="password" id="google-api-key" class="form-input w-full p-2 rounded-md">
+                                <p class="text-xs text-slate-400 mt-1">Your key is stored securely in your browser's local storage.</p>
+                            </div>
+                            <div class="flex justify-end space-x-4">
+                                <button type="button" class="cancel-settings-btn bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-4 rounded-md">Cancel</button>
+                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md">Save</button>
+                            </div>
+                        </form>
+                     </div>
+                </div>
+            `;
+            appView.insertAdjacentHTML('beforeend', modalHtml);
+            appView.querySelectorAll('.modal-overlay, .close-modal-btn, .cancel-delete-btn, .cancel-settings-btn').forEach(el => el.addEventListener('click', closeModal));
+            document.getElementById('settings-form').addEventListener('submit', handleSettingsSave);
+        }
+
+        function openModal(employeeToEdit = null, benefits = []) {
+            const modal = document.getElementById('add-entry-modal');
+            const modalTitle = modal.querySelector('#modal-title');
+            const modalBody = modal.querySelector('#modal-body');
+
+            const isEditMode = !!employeeToEdit;
+            modalTitle.textContent = isEditMode ? 'Edit Employee' : 'Add New Entry';
+
+            modalBody.innerHTML = `
+                <div class="mb-4 border-b border-slate-700 ${isEditMode ? 'hidden' : ''}">
+                    <nav class="flex space-x-4" aria-label="Tabs"><button id="single-entry-tab" class="tab-btn text-blue-400 border-b-2 border-blue-400 px-3 py-2 font-medium">Single Entry</button><button id="csv-upload-tab" class="tab-btn text-slate-400 px-3 py-2 font-medium">CSV Upload</button></nav>
+                </div>
+                <div id="single-entry-view">
+                    <form id="entry-form" class="space-y-4" data-employee-id="${isEditMode ? employeeToEdit.id : ''}">
+                        <h3 class="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2">Employee Details</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div><label for="full_name" class="block text-sm font-medium mb-1">Full Name</label><input type="text" id="full_name" name="full_name" class="form-input w-full p-2 rounded-md" required value="${isEditMode ? employeeToEdit.full_name : ''}"></div>
+                            <div><label for="company" class="block text-sm font-medium mb-1">Company</label><input type="text" id="company" name="company" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.company : ''}"></div>
+                            <div><label for="phone" class="block text-sm font-medium mb-1">Phone</label><input type="tel" id="phone" name="phone" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.phone : ''}"></div>
+                            <div><label for="status" class="block text-sm font-medium mb-1">Status</label><select id="status" name="status" class="form-input w-full p-2 rounded-md"><option>Active</option><option>Terminated</option><option>On Leave</option></select></div>
+                            <div><label for="birthdate" class="block text-sm font-medium mb-1">Birthdate</label><input type="date" id="birthdate" name="birthdate" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.birthdate : ''}"></div>
+                            <div><label for="hourly_rate" class="block text-sm font-medium mb-1">Hourly Rate</label><input type="number" step="0.01" id="hourly_rate" name="hourly_rate" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.hourly_rate : ''}"></div>
+                        </div>
+                        <h3 class="text-lg font-semibold text-slate-300 border-b border-slate-700 pb-2 pt-4">Benefits</h3>
+                        <div id="benefits-form-container" class="space-y-3"></div>
+                        <button type="button" id="add-benefit-btn" class="text-sm text-blue-400 hover:underline">+ Add Benefit</button>
+                        <div class="pt-4 flex justify-end"><button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">${isEditMode ? 'Save Changes' : 'Save Employee'}</button></div>
+                    </form>
+                </div>
+                <div id="csv-upload-view" class="hidden">
+                    <p class="text-slate-400 mb-4">Upload a CSV file to bulk-add employees. Include 'birthdate' (YYYY-MM-DD) and 'hourly_rate' columns.</p>
+                    <div class="p-4 border-2 border-dashed border-slate-600 rounded-lg text-center"><label for="csv-file-input" class="cursor-pointer"><span class="text-blue-400 font-medium">Click to upload a file</span><p class="text-xs text-slate-500 mt-1">CSV up to 5MB</p></label><input type="file" id="csv-file-input" class="hidden" accept=".csv"></div>
+                    <div id="csv-feedback" class="mt-4 text-sm"></div>
+                </div>
+            `;
+
+            if (isEditMode) {
+                modal.querySelector('#status').value = employeeToEdit.status;
+                benefits.forEach(b => addBenefitForm(b));
+            } else {
+                addBenefitForm(); // Add one empty form for new entries
+            }
+
+            modal.querySelector('#add-benefit-btn').addEventListener('click', () => addBenefitForm());
+            modal.querySelector('#entry-form').addEventListener('submit', handleEntrySubmit);
+            if (!isEditMode) {
+                modal.querySelector('#single-entry-tab').addEventListener('click', () => switchTab('single'));
+                modal.querySelector('#csv-upload-tab').addEventListener('click', () => switchTab('csv'));
+                modal.querySelector('#csv-file-input').addEventListener('change', handleCsvFile);
+            }
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.querySelectorAll('#add-entry-modal, #confirm-delete-modal, #settings-modal').forEach(m => m.classList.add('hidden'));
+        }
+
+        function openDeleteConfirm(employeeId) {
+            const modal = document.getElementById('confirm-delete-modal');
+            modal.classList.remove('hidden');
+            const confirmBtn = modal.querySelector('#confirm-delete-action-btn');
+            const newConfirmBtn = confirmBtn.cloneNode(true);
+            confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+            newConfirmBtn.addEventListener('click', () => handleDelete(employeeId));
+        }
+        
+        function openSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            const keyInput = modal.querySelector('#google-api-key');
+            keyInput.value = localStorage.getItem('googleApiKey') || '';
+            modal.classList.remove('hidden');
+        }
+        
+        function handleSettingsSave(event) {
+            event.preventDefault();
+            const key = document.getElementById('google-api-key').value.trim();
+            if (key) {
+                localStorage.setItem('googleApiKey', key);
+                showToast('API Key saved successfully!');
+            } else {
+                localStorage.removeItem('googleApiKey');
+                showToast('API Key removed.', 'error');
+            }
+            closeModal();
+        }
+
+        async function handleDelete(employeeId) {
+            await supabaseClient.from('benefits').delete().eq('employee_id', employeeId);
+            const { error } = await supabaseClient.from('employees').delete().eq('id', employeeId);
+            if (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            } else {
+                showToast('Employee deleted successfully.');
+                appState.selectedEmployeeId = null;
+                fetchEmployees(true); 
+                renderEmptyState();
+            }
+            closeModal();
+        }
+
+        function addBenefitForm(benefit = {}) {
+            const container = document.getElementById('benefits-form-container');
+            const benefitForm = document.createElement('div');
+            benefitForm.className = 'benefit-form-group p-3 border border-slate-700 rounded-md relative';
+            benefitForm.innerHTML = `
+                <button type="button" class="remove-benefit-btn absolute top-2 right-2 text-slate-500 hover:text-red-400">&times;</button>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><label class="block text-sm font-medium mb-1">Benefit Type</label><input type="text" name="benefit_type" class="form-input w-full p-2 rounded-md" required value="${benefit.benefit_type || ''}"></div>
+                    <div><label class="block text-sm font-medium mb-1">Carrier</label><input type="text" name="carrier" class="form-input w-full p-2 rounded-md" value="${benefit.carrier || ''}"></div>
+                    <div><label class="block text-sm font-medium mb-1">Elected Benefit / Plan</label><input type="text" name="elected_benefit" class="form-input w-full p-2 rounded-md" value="${benefit.elected_benefit || ''}"></div>
+                    <div><label class="block text-sm font-medium mb-1">Pay Deduction</label><input type="number" step="0.01" name="pay_deduction" class="form-input w-full p-2 rounded-md bg-slate-700" value="${benefit.pay_deduction || ''}" readonly></div>
+                </div>
+            `;
+            benefitForm.querySelector('.remove-benefit-btn').addEventListener('click', () => benefitForm.remove());
+            container.appendChild(benefitForm);
+        }
+
+        async function handleEntrySubmit(event) {
+            event.preventDefault();
+            const modalLoader = document.getElementById('modal-loader');
+            modalLoader.classList.remove('hidden');
+
+            const form = event.target;
+            const employeeId = form.dataset.employeeId;
+            const isEditMode = !!employeeId;
+
+            const formData = new FormData(form);
+            const employeeData = {
+                full_name: formData.get('full_name'),
+                company: formData.get('company'),
+                phone: formData.get('phone'),
+                status: formData.get('status'),
+                birthdate: formData.get('birthdate'),
+                hourly_rate: formData.get('hourly_rate'),
+            };
+
+            let updatedEmployee;
+            if (isEditMode) {
+                const { data, error } = await supabaseClient.from('employees').update(employeeData).eq('id', employeeId).select();
+                if (error) { showToast(error.message, 'error'); modalLoader.classList.add('hidden'); return; }
+                updatedEmployee = data[0];
+            } else {
+                const { data, error } = await supabaseClient.from('employees').insert(employeeData).select();
+                if (error) { showToast(error.message, 'error'); modalLoader.classList.add('hidden'); return; }
+                updatedEmployee = data[0];
+            }
+
+            const benefitForms = form.querySelectorAll('.benefit-form-group');
+            const benefitsData = Array.from(benefitForms).map(f => {
+                const payDeduction = calculatePayDeduction(updatedEmployee.birthdate, updatedEmployee.hourly_rate);
+                return {
+                    employee_id: updatedEmployee.id,
+                    benefit_type: f.querySelector('[name="benefit_type"]').value,
+                    carrier: f.querySelector('[name="carrier"]').value,
+                    elected_benefit: f.querySelector('[name="elected_benefit"]').value,
+                    pay_deduction: payDeduction,
+                };
+            }).filter(b => b.benefit_type);
+
+            if (isEditMode) {
+                await supabaseClient.from('benefits').delete().eq('employee_id', updatedEmployee.id);
+            }
+            if (benefitsData.length > 0) {
+                const { error } = await supabaseClient.from('benefits').insert(benefitsData);
+                if (error) { showToast(`Benefits Error: ${error.message}`, 'error'); modalLoader.classList.add('hidden'); return; }
+            }
+
+            showToast(`Employee ${isEditMode ? 'updated' : 'added'} successfully!`);
+            await fetchEmployees(true);
+            if (isEditMode) {
+                await handleEmployeeSelection(updatedEmployee.id);
+            }
+            closeModal();
+            modalLoader.classList.add('hidden');
+        }
+
+        function switchTab(tab) {
+            const singleTab = document.getElementById('single-entry-tab');
+            const csvTab = document.getElementById('csv-upload-tab');
+            const singleView = document.getElementById('single-entry-view');
+            const csvView = document.getElementById('csv-upload-view');
+            
+            if (tab === 'single') {
+                singleTab.classList.add('text-blue-400', 'border-blue-400');
+                singleTab.classList.remove('text-slate-400');
+                csvTab.classList.add('text-slate-400');
+                csvTab.classList.remove('text-blue-400', 'border-blue-400');
+                singleView.classList.remove('hidden');
+                csvView.classList.add('hidden');
+            } else {
+                csvTab.classList.add('text-blue-400', 'border-blue-400');
+                csvTab.classList.remove('text-slate-400');
+                singleTab.classList.add('text-slate-400');
+                singleTab.classList.remove('text-blue-400', 'border-blue-400');
+                csvView.classList.remove('hidden');
+                singleView.classList.add('hidden');
+            }
+        }
+
+        async function handleCsvFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const modalLoader = document.getElementById('modal-loader');
+            const csvFeedback = document.getElementById('csv-feedback');
+            modalLoader.classList.remove('hidden');
+            csvFeedback.innerHTML = `Parsing ${file.name}...`;
+
+            Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                complete: async (results) => {
+                    if (results.errors.length) {
+                        const errorMsg = results.errors.map(e => `Row ${e.row}: ${e.message}`).join('<br>');
+                        csvFeedback.innerHTML = `<p class="text-red-400">CSV Parsing Errors:<br>${errorMsg}</p>`;
+                        modalLoader.classList.add('hidden');
+                        return;
+                    }
+                    csvFeedback.innerHTML = `Processing ${results.data.length} rows...`;
+                    await processCsvData(results.data);
+                }
+            });
+        }
+
+        async function processCsvData(data) {
+            const modalLoader = document.getElementById('modal-loader');
+            const employeesMap = new Map();
+            data.forEach(row => {
+                const employeeKey = row.full_name?.trim();
+                if (!employeeKey) return; 
+
+                if (!employeesMap.has(employeeKey)) {
+                    employeesMap.set(employeeKey, {
+                        employeeData: {
+                            full_name: employeeKey,
+                            company: row.company,
+                            phone: row.phone,
+                            status: row.status,
+                            birthdate: row.birthdate,
+                            hourly_rate: row.hourly_rate,
+                        },
+                        benefits: []
+                    });
+                }
+                
+                if (row.benefit_type) {
+                     employeesMap.get(employeeKey).benefits.push({
+                        benefit_type: row.benefit_type,
+                        carrier: row.carrier,
+                        elected_benefit: row.elected_benefit
+                    });
+                }
+            });
+
+            const employeesToInsert = Array.from(employeesMap.values()).map(e => e.employeeData);
+            const { data: insertedEmployees, error: empError } = await supabaseClient
+                .from('employees')
+                .insert(employeesToInsert)
+                .select();
+
+            if (empError) {
+                showToast(`CSV Error: ${empError.message}`, 'error');
+                modalLoader.classList.add('hidden');
+                return;
+            }
+
+            const nameToIdMap = new Map(insertedEmployees.map(e => [e.full_name, e.id]));
+            const allBenefitsToInsert = [];
+            employeesMap.forEach((value, key) => {
+                const newId = nameToIdMap.get(key);
+                if (newId) {
+                    const emp = insertedEmployees.find(e => e.id === newId);
+                    value.benefits.forEach(benefit => {
+                        const payDeduction = calculatePayDeduction(emp.birthdate, emp.hourly_rate);
+                        allBenefitsToInsert.push({ ...benefit, employee_id: newId, pay_deduction: payDeduction });
+                    });
+                }
+            });
+
+            if (allBenefitsToInsert.length > 0) {
+                const { error: benError } = await supabaseClient.from('benefits').insert(allBenefitsToInsert);
+                if (benError) {
+                    showToast(`Employees added, but benefits failed: ${benError.message}`, 'error');
+                    modalLoader.classList.add('hidden');
+                    return;
+                }
+            }
+            
+            showToast(`${insertedEmployees.length} employees added via CSV.`);
+            await fetchEmployees(true);
+            closeModal();
+            modalLoader.classList.add('hidden');
+        }
+        
+        function calculatePayDeduction(birthdate, hourly_rate) {
+            if (!birthdate || !hourly_rate) return 0;
+            const age = Math.floor((new Date() - new Date(birthdate).getTime()) / 3.15576e+10);
+            const weeklySalary = parseFloat(hourly_rate) * 40;
+
+            const rates = {
+                'Under 25': [1.48, 2.23, 2.97, 3.71, 4.45, 5.19, 5.94, 6.68, 7.42, 8.16, 8.90, 9.65, 10.39, 11.13, 11.87, 12.61, 13.35, 14.10, 14.84, 15.58, 16.32],
+                '25-29': [1.92, 2.88, 3.84, 4.80, 5.76, 6.72, 7.68, 8.64, 9.60, 10.56, 11.52, 12.48, 13.44, 14.40, 15.36, 16.32, 17.28, 18.24, 19.20, 20.16, 21.12],
+                '30-34': [1.23, 1.85, 2.47, 3.09, 3.70, 4.32, 4.94, 5.56, 6.17, 6.79, 7.41, 8.03, 8.64, 9.26, 9.88, 10.49, 11.11, 11.73, 12.35, 12.96, 13.58],
+                '35-39': [1.21, 1.81, 2.42, 3.02, 3.63, 4.23, 4.84, 5.44, 6.05, 6.65, 7.26, 7.86, 8.46, 9.07, 9.67, 10.28, 10.88, 11.49, 12.09, 12.70, 13.31],
+                '40-44': [1.25, 1.87, 2.50, 3.12, 3.75, 4.37, 4.99, 5.62, 6.24, 6.87, 7.49, 8.12, 8.74, 9.36, 9.99, 10.61, 11.24, 11.86, 12.48, 13.11, 13.73],
+                '45-49': [1.39, 2.09, 2.78, 3.48, 4.17, 4.87, 5.57, 6.26, 6.96, 7.65, 8.35, 9.05, 9.74, 10.44, 11.13, 11.83, 12.52, 13.22, 13.92, 14.61, 15.31],
+                '50-54': [1.87, 2.81, 3.75, 4.68, 5.62, 6.56, 7.50, 8.43, 9.37, 10.31, 11.24, 12.18, 13.12, 14.05, 14.99, 15.93, 16.86, 17.80, 18.74, 19.68, 20.61],
+                '55-59': [2.52, 3.78, 5.04, 6.30, 7.55, 8.81, 10.07, 11.33, 12.59, 13.85, 15.11, 16.37, 17.62, 18.88, 20.14, 21.40, 22.66, 23.92, 25.18, 26.44, 27.69],
+                '60+': [3.32, 4.97, 6.63, 8.29, 9.95, 11.61, 13.26, 14.92, 16.58, 18.24, 19.90, 21.56, 23.21, 24.87, 26.53, 28.19, 29.85, 31.50, 33.16, 34.82, 36.48],
+            };
+            const salaryBrackets = [100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 900, 950, 1000, 1050, 1100];
+
+            let ageGroup;
+            if (age < 25) ageGroup = 'Under 25';
+            else if (age <= 29) ageGroup = '25-29';
+            else if (age <= 34) ageGroup = '30-34';
+            else if (age <= 39) ageGroup = '35-39';
+            else if (age <= 44) ageGroup = '40-44';
+            else if (age <= 49) ageGroup = '45-49';
+            else if (age <= 54) ageGroup = '50-54';
+            else if (age <= 59) ageGroup = '55-59';
+            else ageGroup = '60+';
+
+            let salaryIndex = salaryBrackets.findIndex(bracket => weeklySalary <= bracket);
+            if (salaryIndex === -1) salaryIndex = salaryBrackets.length - 1;
+
+            return rates[ageGroup][salaryIndex] || 0;
+        }
+
+        function debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+        
+        function showToast(message, type = 'success') {
+            toastMessage.textContent = message;
+            toast.className = `fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg transition-opacity duration-300 ${type === 'error' ? 'bg-red-600' : 'bg-green-500'}`;
+            toast.classList.remove('hidden');
+            setTimeout(() => {
+                toast.classList.add('hidden');
+            }, 4000);
+        }
+        
+        async function getAiSummary(employee, benefits) {
+            const summaryContainer = document.getElementById('summary-content');
+            if (!summaryContainer) return;
+            
+            const apiKey = localStorage.getItem('googleApiKey');
+            if (!apiKey) {
+                summaryContainer.innerHTML = `<p class="text-yellow-400 text-sm">Please add a Google AI API key in Settings to enable summaries.</p>`;
+                return;
+            }
+
+            summaryContainer.innerHTML = '<div class="skeleton-loader h-16 w-full"></div>';
+
+            const age = Math.floor((new Date() - new Date(employee.birthdate).getTime()) / 3.15576e+10);
+            const benefitsList = benefits.map(b => `- Benefit: ${b.benefit_type}, Carrier: ${b.carrier}`).join('\n');
+            const prompt = `Based on the following data, write a brief, one-paragraph summary explaining the employee's current status, age, and hourly rate, and giving a narrative overview of their key benefits. Do not use markdown.
+                **Employee Data:** Name: ${employee.full_name}, Company: ${employee.company}, Status: ${employee.status}, Age: ${age}, Hourly Rate: $${employee.hourly_rate}
+                **Benefits Data:** ${benefitsList || 'No benefits'}`;
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] })
+                });
+                if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text) {
+                    summaryContainer.innerHTML = `<p class="prose prose-invert max-w-none">${text}</p>`;
+                } else {
+                    throw new Error("Invalid AI response");
+                }
+            } catch (error) {
+                summaryContainer.innerHTML = `<p class="text-red-500">Could not generate summary. Check your API key in Settings.</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
