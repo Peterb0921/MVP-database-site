@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MVP Consulting Group</title>
+    <title>Professional Employee Directory</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
@@ -68,7 +68,7 @@
     <!-- Auth View -->
     <div id="auth-view" class="h-screen w-full flex items-center justify-center p-4">
         <div class="auth-card w-full max-w-sm p-8 rounded-lg shadow-xl border border-slate-800">
-            <h1 class="text-2xl font-bold text-center mb-6">MVP Consulting Group</h1>
+            <h1 class="text-2xl font-bold text-center mb-6">Employee Directory</h1>
             <form id="login-form" class="space-y-4">
                 <div>
                     <label for="email" class="block text-sm font-medium mb-1">Email</label>
@@ -120,7 +120,7 @@
             isLoadingMore: false,
             hasMore: true,
             user: null,
-            statusFilter: 'all',
+            statusFilter: 'all', // New state for filtering
         };
 
         // --- INITIALIZATION ---
@@ -145,7 +145,7 @@
                     <header class="p-4 border-b border-slate-800 flex justify-between items-center flex-shrink-0">
                         <div class="flex items-center space-x-2">
                              <svg class="h-6 w-6 text-blue-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-2.438M15 19.128v-3.872M15 19.128l-3.262-3.262a5.03 5.03 0 00-7.072-7.072l-3.262 3.262M15 19.128l2.104-2.104a5.035 5.035 0 000-7.072M9 15v3.872M9 15l-3.262-3.262a5.03 5.03 0 010-7.072L9 4.664M9 15l2.104-2.104a5.035 5.035 0 017.072 0" /></svg>
-                            <h1 class="text-lg font-bold">MVP Consulting Group</h1>
+                            <h1 class="text-lg font-bold">Employee Directory</h1>
                         </div>
                         <div class="flex items-center space-x-2">
                             <button id="settings-btn" class="p-2 rounded-full hover:bg-slate-700 cursor-pointer" title="Settings">
@@ -164,7 +164,7 @@
                         <div id="status-filter-group" class="flex items-center space-x-2">
                             <button data-status="all" class="filter-btn active flex-1 text-sm py-1 px-2 rounded-md">All</button>
                             <button data-status="Active" class="filter-btn flex-1 text-sm py-1 px-2 rounded-md">Active</button>
-                            <button data-status="Terminated" class="filter-btn flex-1 text-sm py-1 px-2 rounded-md">Terminated</button>
+                            <button data-status="Inactive" class="filter-btn flex-1 text-sm py-1 px-2 rounded-md">Inactive</button>
                         </div>
                     </div>
                     <div id="employee-list-container" class="flex-grow overflow-y-auto">
@@ -244,21 +244,7 @@
         function showAuth() {
             appView.classList.add('hidden');
             authView.classList.remove('hidden');
-            // Non-destructive logout: reset state instead of clearing HTML
-            appState.employees = [];
-            appState.selectedEmployeeId = null;
-            appState.currentPage = 0;
-            appState.hasMore = true;
-            appState.statusFilter = 'all';
-            if (document.getElementById('main-content')) {
-                renderEmptyState();
-            }
-            if (document.getElementById('employee-list')) {
-                document.getElementById('employee-list').innerHTML = '';
-            }
-            const searchInput = document.getElementById('searchName');
-            if (searchInput) searchInput.value = '';
-            updateFilterButtonsUI();
+            appView.innerHTML = '';
         }
 
         // --- DATA FETCHING & RENDERING (with Pagination & Filtering) ---
@@ -294,16 +280,6 @@
             if (error) {
                 console.error("Error fetching employees:", error);
                 appState.isLoadingMore = false;
-                if (isInitial) {
-                    const mainContentEl = document.getElementById('main-content');
-                    if (mainContentEl) {
-                        mainContentEl.innerHTML = `<div class="text-center p-8 text-red-400">
-                            <h2 class="text-xl font-bold">Failed to Load Data</h2>
-                            <p>${error.message}</p>
-                            <p class="mt-4 text-sm text-slate-500">Please check your internet connection and ensure the database is active, then refresh the page.</p>
-                        </div>`;
-                    }
-                }
                 return;
             }
             
@@ -351,9 +327,7 @@
         }
 
         function updateFilterButtonsUI() {
-            const filterGroup = document.getElementById('status-filter-group');
-            if (!filterGroup) return;
-            filterGroup.querySelectorAll('.filter-btn').forEach(btn => {
+            document.querySelectorAll('#status-filter-group .filter-btn').forEach(btn => {
                 if (btn.dataset.status === appState.statusFilter) {
                     btn.classList.add('active');
                 } else {
@@ -578,7 +552,7 @@
                             <div><label for="full_name" class="block text-sm font-medium mb-1">Full Name</label><input type="text" id="full_name" name="full_name" class="form-input w-full p-2 rounded-md" required value="${isEditMode ? employeeToEdit.full_name : ''}"></div>
                             <div><label for="company" class="block text-sm font-medium mb-1">Company</label><input type="text" id="company" name="company" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.company : ''}"></div>
                             <div><label for="phone" class="block text-sm font-medium mb-1">Phone</label><input type="tel" id="phone" name="phone" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.phone : ''}"></div>
-                            <div><label for="status" class="block text-sm font-medium mb-1">Status</label><select id="status" name="status" class="form-input w-full p-2 rounded-md"><option>Active</option><option>Terminated</option><option>On Leave</option></select></div>
+                            <div><label for="status" class="block text-sm font-medium mb-1">Status</label><select id="status" name="status" class="form-input w-full p-2 rounded-md"><option>Active</option><option>Inactive</option><option>On Leave</option></select></div>
                             <div><label for="birthdate" class="block text-sm font-medium mb-1">Birthdate</label><input type="date" id="birthdate" name="birthdate" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.birthdate : ''}"></div>
                             <div><label for="hourly_rate" class="block text-sm font-medium mb-1">Hourly Rate</label><input type="number" step="0.01" id="hourly_rate" name="hourly_rate" class="form-input w-full p-2 rounded-md" value="${isEditMode ? employeeToEdit.hourly_rate : ''}"></div>
                         </div>
